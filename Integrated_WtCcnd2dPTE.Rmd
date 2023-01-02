@@ -1,0 +1,1082 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(patchwork)
+
+# reticulate::py_discover_config()
+# reticulate::py_module_available("leidenalg")
+# reticulate::py_module_available("pandas")
+```
+
+
+```{r}
+##### Creating seurat objects with the two 10x data
+Yurit1001.data <- Read10X(data.dir = "/corgi/angele/cellranger/P26151_1001/outs/filtered_feature_bc_matrix")
+Yurit1002.data <- Read10X(data.dir = "/corgi/angele/Yurit/P26151_1002/outs/filtered_feature_bc_matrix")
+
+
+Yurit1001 <- CreateSeuratObject(Yurit1001.data, project = "YuriT1001", min.cells = 3, min.features = 200)
+Yurit1002 <- CreateSeuratObject(Yurit1002.data, project = "YuriT1002", min.cells = 3, min.features = 200)
+
+```
+
+```{r}
+##### Filtering, preprocessing (Normalize, HVG, Scale) and Cell cycle scoring Yurit1001 (WT)
+Yurit1001[["percent.mt"]] <- PercentageFeatureSet(Yurit1001, pattern = "^mt")
+plot1 <- FeatureScatter(Yurit1001, "nCount_RNA", "percent.mt")
+plot2 <- FeatureScatter(Yurit1001, "nCount_RNA", "nFeature_RNA")
+plot1+plot2
+VlnPlot(Yurit1001, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
+Yurit1001Filtered <- subset(Yurit1001, subset = nFeature_RNA <3000 & nFeature_RNA >500 & nCount_RNA<15000 & percent.mt<15)
+
+Yurit1001Filtered <- NormalizeData(object = Yurit1001Filtered,normalization.method = "LogNormalize", scale.factor = 10000)
+
+Yurit1001Filtered <- FindVariableFeatures(object = Yurit1001Filtered, selection.method = "vst", nfeatures = 2000)
+
+all.genes <- rownames(Yurit1001Filtered)
+Yurit1001Filtered <- ScaleData(object = Yurit1001Filtered, features = all.genes)
+  
+  
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+Yurit1001Filtered <- CellCycleScoring(Yurit1001Filtered, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+```
+
+```{r}
+##### Filtering, preprocessing (Normalize, HVG, Scale) and Cell cycle scoring Yurit1002 (knockout)
+Yurit1002[["percent.mt"]] <- PercentageFeatureSet(Yurit1002, pattern = "^mt")
+plot1 <- FeatureScatter(Yurit1002, "nCount_RNA", "percent.mt")
+plot2 <- FeatureScatter(Yurit1002, "nCount_RNA", "nFeature_RNA")
+plot1+plot2
+VlnPlot(Yurit1002, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
+Yurit1002Filtered <- subset(Yurit1002, subset = nFeature_RNA <3000 & nFeature_RNA >500 & nCount_RNA<15000 & percent.mt<15)
+
+Yurit1002Filtered <- NormalizeData(object = Yurit1002Filtered,normalization.method = "LogNormalize", scale.factor = 10000)
+
+Yurit1002Filtered <- FindVariableFeatures(object = Yurit1002Filtered, selection.method = "vst", nfeatures = 2000)
+
+all.genes <- rownames(Yurit1002Filtered)
+Yurit1002Filtered <- ScaleData(object = Yurit1002Filtered, features = all.genes)
+  
+  
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+Yurit1002Filtered <- CellCycleScoring(Yurit1002Filtered, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+```
+
+
+#Integration
+```{r}
+##### Perfom integration
+
+#Create a list with the objects
+yurit.list <- c(Yurit1001Filtered, Yurit1002Filtered)
+
+#select integration features
+features <- SelectIntegrationFeatures(object.list = yurit.list)
+#find integration anchors
+yurit_anchors <- FindIntegrationAnchors(object.list = yurit.list, anchor.features = features)
+#integrate data
+yurit.integrated <- IntegrateData(anchorset = yurit_anchors)
+
+#saveRDS(yurit.integrated, file ="~/YuriT/Outputs/RawYurit.integrated.rds")
+#yurit.integrated <- readRDS (file ="~/YuriT/Outputs/RawYurit.integrated.rds")
+```
+
+
+```{r}
+##### Perform integrated analysis
+# downstream analysis performed on the corrected (Integrated) data. The original unmodified data still resides in the 'RNA' assay
+DefaultAssay(yurit.integrated) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+yurit.integrated <- ScaleData(object = yurit.integrated)
+
+yurit.integrated <- RunPCA(object = yurit.integrated)
+  #ElbowPlot(yurit.integrated, ndims = 40)
+  
+ yurit.integrated <- RunUMAP(object = yurit.integrated, dims = 1:20) 
+  yurit.integrated <- FindNeighbors(yurit.integrated, reduction = "pca", dims = 1:20)
+  yurit.integrated <- FindClusters(yurit.integrated, resolution = 0.5, algorithm = 4)
+  Idents(yurit.integrated) <- "seurat_clusters"
+px <- DimPlot(yurit.integrated, reduction = "umap", label = TRUE, label.size = 4) + NoLegend()
+#ggsave("~/YuriT/Outputs/ClusterNum.png", plot = px, dpi = 300, width=10, height=10, units= "cm") 
+```
+
+```{r}
+#Idents(yurit.integrated) <- "CellType"
+px <- DimPlot(yurit.integrated, reduction = "umap", label = TRUE, label.size = 4, repel = TRUE) + guides(color = guide_legend(override.aes = list(size=8), ncol=1) )
+#ggsave("~/YuriT/Outputs/ClusterCTyp.png", plot = px, dpi = 300, width=30, height=20, units= "cm")
+```
+
+
+```{r}
+#saveRDS(yurit.integrated, file ="~/YuriT/Outputs/UMAP_Yurit.integrated.rds")
+```
+
+
+
+```{r}
+p1 <- DimPlot(yurit.integrated, reduction = "umap", group.by = "orig.ident")
+p2 <- DimPlot(yurit.integrated, reduction = "umap", label = TRUE, repel = FALSE)
+p1+p2
+```
+
+
+```{r}
+DimPlot(yurit.integrated, reduction = "umap", split.by = "orig.ident", label = TRUE)
+```
+
+```{r}
+# install.packages('BiocManager')
+# BiocManager::install('multtest')
+# install.packages('metap')
+# install.packages("qqconf")
+```
+
+```{r}
+##### Cluster cell type identification. Find conserved marker genes for each cluster (marker genes that are conserve between the two samples). Performed on the original unmodified data in the 'RNA' assay.
+
+DefaultAssay(yurit.integrated) <- "RNA"
+
+constMarker_list <- list()
+ for (i in 1:18) {
+   constMarker_list[[paste0("cluster",i,".ConsMarker")]] <- FindConservedMarkers(yurit.integrated, ident.1 = i, grouping.var = "orig.ident", verbose = FALSE)
+#assign(paste0("cluster",i,".ConsMarker"), FindConservedMarkers(yurit.integrated, ident.1 = i, grouping.var = "orig.ident", verbose = FALSE))
+ } 
+
+constMarker_list
+```
+
+
+```{r}
+##### Find Marker genes for the clusters
+yurit.integrated.markers <- FindAllMarkers(yurit.integrated, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+AllClusterMarkers.df <- yurit.integrated.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 5, order_by = avg_log2FC)
+AllClusterMarkers.df
+```
+
+
+```{r}
+# write.csv(yurit.integrated.markers, file ="~/YuriT/Outputs/Yurit_integrated3AllClusterMarkers.df")
+# write.csv(AllClusterMarkers.df, file ="~/YuriT/Outputs/slicedTop5_Yurit_integrated3AllClusterMarkers.df")
+# 
+# Yurit_integrated3AllClusterMarkers.df <- read.csv(file ="~/YuriT/Outputs/Yurit_integrated3AllClusterMarkers.df")
+# View(Yurit_integrated3AllClusterMarkers.df)
+```
+
+
+```{r}
+##### Creating a df with the top 5 marker genes of each cluster on the same row
+
+AllClusterMarkers.df <- AllClusterMarkers.df[,6:7]
+
+AllClusterMarkers.df %>%
+group_by(cluster) %>%
+summarise(genes_collapsed = paste(gene, collapse=", "))
+```
+
+
+```{r}
+VlnPlot(yurit.integrated, features = "Ccnd2", split.by = "orig.ident")
+FeaturePlot(yurit.integrated, features = "Ccnd2", split.by = "orig.ident", max.cutoff = 3, cols = c("grey", "red"))
+```
+
+```{r}
+VlnPlot(yurit.integrated, features = "Ccnd1", split.by = "orig.ident")
+FeaturePlot(yurit.integrated, features = "Ccnd1", split.by = "orig.ident", max.cutoff = 3, cols = c("grey", "red"))
+```
+
+```{r}
+DimPlot(yurit.integrated,
+        reduction = "umap",
+        group.by= "Phase")
+
+DimPlot(yurit.integrated,
+        reduction = "umap",
+        group.by= "Phase", split.by = "orig.ident")
+```
+
+```{r}
+RidgePlot(yurit.integrated, features = "Ccnd2", group.by = "orig.ident")
+RidgePlot(yurit.integrated, features = "Ccnd2", group.by = "Phase")
+RidgePlot(yurit.integrated, features = "Ccnd2")
+RidgePlot(yurit.integrated, features = "Ccnd2", fill.by = "orig.ident")
+```
+
+```{r}
+##### Plot marker genes by sample of origin
+
+FeaturePlot(yurit.integrated, features = c("Foxp3", "Ikzf2", "Maf"), split.by = "orig.ident", max.cutoff = 3, cols = c("grey", "red"))
+FeaturePlot(yurit.integrated, features = c("Gm10076", "Uba52"), split.by = "orig.ident", max.cutoff = 3, cols = c("grey", "red"))
+FeaturePlot(yurit.integrated, features = c("Igfbp4", "Ppbp"), split.by = "orig.ident", max.cutoff = 3, cols = c("grey", "red"))
+FeaturePlot(yurit.integrated, features = c("Foxp3", "Ikzf2", "Maf"), split.by = "orig.ident", max.cutoff = 3, cols = c("grey", "red"))
+FeaturePlot(yurit.integrated, features = c("Hbb-bs", "Nkg7", "Cela1"), split.by = "orig.ident", max.cutoff = 3, cols = c("grey", "red"))	
+```
+
+
+```{r}
+##### Calculate Ccnd2 fold change and p-value for each cell type https://satijalab.org/seurat/reference/foldchange
+
+
+#Idea1: Create a new column in the Seurat object containing a combination of cluster name and orig.ident then set ident to that column. Subset by cluster then run FindMarkers with ident1 on clustername_orig.ident1 and ident2 on clustername_orig.ident2
+
+
+yurit.integrated$celltype_orig.ident <- paste(Idents(yurit.integrated), yurit.integrated$orig.ident, sep = "_") #create a new column in the combined seurat object with the cluster name (cell ID) and sample of origin ID
+
+yurit.integrated$celltype <- Idents(yurit.integrated) #keep current Idents(clusterIDs) in a new column called celltype
+Idents(yurit.integrated) <- "celltype"
+
+NumberOfCluster <- levels(yurit.integrated@meta.data$seurat_clusters)
+cluster_list <- list()
+
+for (i in 1:length(NumberOfCluster)) {
+ cluster_list[[paste0("Cluster",i)]] <- subset(yurit.integrated, idents = i)
+}
+
+
+Idents(yurit.integrated) <- "celltype_orig.ident"
+
+DE.Cluster1 <- FindMarkers(yurit.integrated, ident.1 = "1_YuriT1001", ident.2 = "1_YuriT1002", verbose = FALSE) 
+View(DE.Cluster1) # No Cccnd2 among DE genes in cluster1 between conditions
+
+
+#Idea2
+#Create a new column in the Seurat object containing a combination of cluster name and orig.ident then set ident to that column. Subset by cluster then run FoldChange
+FoldChange(yurit.integrated, ident.1 = "1_YuriT1001", ident.2 = "1_YuriT1002", features ="Ccnd2")#does not give p values
+
+```
+
+```{r}  
+##### Ccnd2 average log2FC with pvalues between WT and dPTE in all clusters.
+
+Ccnd2.DE.Cluster_list <- list ()
+for (i in 1:length(NumberOfCluster)) {
+df <- FindMarkers(yurit.integrated, ident.1 = paste0(i,"_YuriT1001"), ident.2 =paste0(i,"_YuriT1002"), verbose = FALSE, logfc.threshold = 0)
+df$cluster <- i
+df$gene <- rownames(df)
+rownames(df) <- NULL
+Ccnd2.DE.Cluster_list[[paste0("DE.Cluster",i)]] <- df
+}
+
+Ccnd2.DE.Cluster_merged <- Reduce(rbind, Ccnd2.DE.Cluster_list)
+sub_Ccnd2.DE.Cluster_merged <- Ccnd2.DE.Cluster_merged %>%
+  filter(gene=="Ccnd2")
+sub_Ccnd2.DE.Cluster_merged
+#write.csv(sub_Ccnd2.DE.Cluster_merged,file = "~/YuriT/Outputs/FoldChangeCcnd2InCluster")
+#DE.Cluster["Ccnd2",]
+
+# DE.Cluster1.2 <- FindMarkers(yurit.integrated, ident.1 = "1_YuriT1001", ident.2 = "1_YuriT1002", verbose = FALSE, genes.use = c("Cccnd2"))
+# View(DE.Cluster1.2)
+
+# DE.Cluster1.4 <- FindMarkers(yurit.integrated, ident.1 = "1_YuriT1001", ident.2 = "1_YuriT1002", verbose = FALSE, features = intersect(rownames(yurit.integrated), c("Cccnd2")), logfc.threshold = 0.25)
+# View(DE.Cluster1.4)
+```
+
+
+
+```{r}
+##### Checking marker genes
+Idents(yurit.integrated) <- "celltype"
+VlnPlot(yurit.integrated,features = c("Cd19", "Cd27", "Cd28", "Cd44", "Cd4"), combine = FALSE)
+```
+
+```{r}
+##### Looking for DE between cluster 4 and 15
+FindMarkers(yurit.integrated, ident.1 = "4", ident.2 = "15")
+```
+
+```{r}
+##### Hard to identify cell type of Cluster 4, 9 and 15. Subclustering them to see if there is more specificity to them. Saved it under a new seurat object (yurit.integratedSubC) just in case something is messed-up, there will still be the original seurat object and no need to redo the previous steps
+
+yurit.integratedSubC <- FindSubCluster(yurit.integrated, graph.name = "integrated_snn", subcluster.name = "subC", cluster = c("4", "9", "15"), resolution = 0.5, algorithm = 4)
+
+DimPlot(yurit.integratedSubC, reduction = "umap", group.by = "subC", label = TRUE)
+```
+
+```{r}
+##### Find Markers in the subclustered object
+yurit.integratedSubC <- SetIdent(yurit.integratedSubC, value = yurit.integratedSubC@meta.data$subC)
+SubC_Markers <- FindAllMarkers(yurit.integratedSubC, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+SubC_Markers.df <- SubC_Markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 5, order_by = avg_log2FC)
+SubC_Markers.df <- SubC_Markers.df[, c(6,7, 1:5)]
+SubC_Markers.df <- SubC_Markers.df %>% group_by(cluster)
+```
+
+```{r}
+##### Retreving only subclusters markers in a df
+
+rows_to_keep <- paste(rep(c(4,9,15), each=6), c(1:6), sep="_")
+rows_to_keep
+
+# SubC4915_Markers.df <- SubC_Markers.df %>% filter(row.names(SubC_Markers.df) %in% rows_to_keep)
+SubC4915_Markers.df <- SubC_Markers.df[SubC_Markers.df$cluster %in% rows_to_keep,]
+ 
+SubC4915_Markers.df <- SubC4915_Markers.df %>% group_by(cluster) %>% arrange(cluster)
+
+write.csv(SubC4915_Markers.df, file = "~/YuriT/Outputs/SubC4915_Markers.df")
+SubC4915_Markers.df
+
+```
+
+```{r}
+Idents(yurit.integratedSubC) <-"seurat_clusters"
+```
+
+
+```{r}
+##### AUTOMATIC LABELLING OF CELLS USING SingleR
+
+
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install("scRNAseq")
+# 
+# 
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install("TabulaMurisData")
+
+# library(ExperimentHub)
+# 
+# eh <- ExperimentHub()
+# query(eh, "TabulaMurisData")
+# 
+# eh[["EH1617"]]
+# 
+# spleen_ref <- eh[["EH1617"]]
+# spleen_ref <- spleen_ref[, spleen_ref$tissue == "Spleen"]
+# spleen_ref <- spleen_ref[,!is.na(spleen_ref$cell_ontology_class)]
+# 
+# BiocManager::install("scuttle")
+# library(scuttle)
+# 
+# spleen_ref <- logNormCounts(spleen_ref)
+# 
+# # BiocManager::install("SingleR")
+# library(SingleR)
+# 
+# results <- SingleR(test = as.SingleCellExperiment(yurit.integratedSubC), ref = spleen_ref, labels = spleen_ref$cell_ontology_class)
+# 
+# yurit.integratedSubC$singlr_label <- results$labels
+# 
+# a <- DimPlot(yurit.integratedSubC, reduction = "umap", group.by = 'singlr_label', label = FALSE)
+# png("~/YuriT/Outputs/umap_automaticLabel1.png", res = 250, width = 2500, height = 1500)
+# print(a)
+# dev.off()
+##########################Ref dataset maooed cells just as T cells, no subtype Try again with other reference dattaset
+
+```
+
+
+```{r}
+##### AUTOMATIC CLUSTER LABELLING USING SingleR with MonacoImmuneData as reference (https://bioconductor.org/packages/devel/data/experiment/manuals/celldex/man/celldex.pdf)
+
+# #BiocManager::install("celldex")
+# library(celldex)
+# ref <- celldex::MonacoImmuneData()
+# results <- SingleR(test = as.SingleCellExperiment(yurit.integratedSubC), ref = ref, labels = ref$label.fine)
+# 
+# yurit.integratedSubC$singlr_label <- results$labels
+# yurit.integratedSubC[[]]
+# 
+# b <- DimPlot(yurit.integratedSubC, reduction = "umap", group.by = 'singlr_label', label = FALSE)
+# png("~/YuriT/Outputs/umap_automaticLabel2.png", res = 250, width = 2500, height = 1500)
+# print(b)
+# dev.off()
+# b
+######################Not very specific also.
+```
+
+```{r}
+ref <- celldex::MouseRNAseqData()
+results <- SingleR(test = as.SingleCellExperiment(yurit.integratedSubC), ref = ref, labels = ref$label.fine)
+
+yurit.integratedSubC$singlr_label <- results$labels
+yurit.integratedSubC[[]]
+
+c <- DimPlot(yurit.integratedSubC, reduction = "umap", group.by = 'singlr_label', label = FALSE)
+png("~/YuriT/Outputs/umap_automaticLabel2.png", res = 250, width = 2500, height = 1500)
+print(c)
+dev.off()
+c
+```
+
+
+```{r}
+##### Automatic labelling with ScType from nature article:[https://doi.org/10.1038/s41467-022-28803-w]
+
+# load libraries and functions
+#install.packages('HGNChelper')
+library(HGNChelper)
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R"); source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+
+# get cell-type-specific gene sets from our in-built database (DB)
+gs_list = gene_sets_prepare("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_short.xlsx", "Immune system") # e.g. Immune system, Liver, Pancreas, Kidney, Eye, Brain
+
+# assign cell types
+db_ = "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx";
+tissue = "Immune system" # e.g. Immune system,Pancreas,Liver,Eye,Kidney,Brain,Lung,Adrenal,Heart,Intestine,Muscle,Placenta,Spleen,Stomach,Thymus 
+
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue)
+
+es.max = sctype_score(scRNAseqData = yurit.integratedSubC[["integrated"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(yurit.integratedSubC@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(yurit.integratedSubC@meta.data[yurit.integratedSubC@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(yurit.integratedSubC@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+autoLabelCluster <- sctype_scores[,1:3]
+write.csv(autoLabelCluster, file = "~/YuriT/Outputs/autoLabelCluster") 
+################Seems usable
+
+```
+
+
+```{r}
+##### Checking marker genes on plots 
+
+# levels(yurit.integratedSubC@meta.data$celltype)
+# VlnPlot(yurit.integrated,features = c("Tox", "Tigit", "Pdcd1"), combine = FALSE)
+# VlnPlot(yurit.integrated,features = c("Il4", "Gata3"), combine = FALSE)
+# FeaturePlot(yurit.integrated, features = c("Tox", "Tigit","Pdcd1")) 
+# 
+# VlnPlot(yurit.integrated,features = c("Cd44", "Sell", "Cd4"), combine = FALSE)
+# FeaturePlot(yurit.integrated, features = c("Tcf1", "Tcf7", "Pdcd1", "Tim3"))
+# 
+# VlnCD14_CD16 <- VlnPlot(yurit.integrated,features = c("Cd14", "Fcgr3"), combine = FALSE)
+# png("~/YuriT/Outputs/VlnCD14_CD16.png", res = 250, width = 2500, height = 1500)
+# print(VlnCD14_CD16)
+# dev.off()
+# 
+# FPlotCD14_CD16 <- FeaturePlot(yurit.integrated, features = c("Cd14", "Fcgr3"))
+# png("~/YuriT/Outputs/FPlotCD14_CD16.png", res = 250, width = 2500, height = 1500)
+# print(FPlotCD14_CD16)
+# dev.off()
+# 
+# DPlotClusterIDs <- DimPlot(yurit.integrated, reduction = "umap", group.by = "seurat_clusters", label = TRUE)
+# DPlotClusterNum <- DimPlot(yurit.integrated, reduction = "umap", group.by = "celltype", label = TRUE)
+# png("~/YuriT/Outputs/DPlotClusterNum.png", res = 250, width = 2500, height = 1500)
+# print(DPlotClusterNum)
+# dev.off()
+# 
+# VlnCD14_CD16
+# FPlotCD14_CD16
+# DPlotClusterNum
+```
+```{r}
+##### Automatic cell type labeling of clusters using SingleR
+# library(scRNAseq)
+# ref <- scRNAseq::BacherTCellData()
+# ref <- scuttle::logNormCounts(ref)
+# results <- SingleR(test = as.SingleCellExperiment(yurit.integratedSubC), ref = ref, labels = ref$new_cluster_names)
+# 
+# yurit.integratedSubC$singlr_label <- results$labels
+# yurit.integratedSubC[[]]
+# 
+# d <- DimPlot(yurit.integratedSubC, reduction = "umap", group.by = 'singlr_label', label = FALSE)
+# png("~/YuriT/Outputs/umap_automaticLabel3.png", res = 250, width = 2500, height = 1500)
+# print(d)
+# dev.off()
+# d
+# b
+# c
+# a
+# DimPlot(yurit.integrated, reduction = "umap", group.by = "seurat_clusters", label = TRUE)
+```
+
+```{r}
+##### Assign cell type ID to clusters
+
+#new.cluster.ids <- c("Naïve Cd4 Tcells C1" , "Naïve Cd4 Tcells C2", "Naïve Cd4 Tcells C3", "Naïve Cd4 Tcells C4", "Regulatory Cd4 Tcells", "Non-classical Monocytes", "Activated Cd4 Memory T cells", "Platelets", "Naïve Cd4 Tcells C9", "Plasmacytoid DCs", "Activated Regulatory Cd4 Tcells", "NKT cells", "Naïve Cd4 Tcells C13", "Acinar cells", "Cd4 Memory Tcells", "gDT", "Erythroid cells", "NK")
+
+new.cluster.ids <- c("Intermediate_Naïve-Treg", "Naïve", "Intermediate_Naïve-Cd69", "Intermediate_Naïve-Smc4", "Tregs", "Non classical monocytes/Macrophage", "Effector memory", "Platelets", "IntermediateNaïve_Cholesterol", "Intermediate_Naïve-InterferonResponse", "Exhausted effector", "NKT cells", "Intermediate_Naïve-Repressed", "Acinar cells", "Memory", "gDT", "Erythroid cells", "NK")
+names(new.cluster.ids) <- levels(yurit.integrated)
+
+yurit.integrated <- RenameIdents(yurit.integrated, new.cluster.ids) 
+DimPlot(yurit.integrated, reduction = "umap", label = TRUE, pt.size = 0.8)
+
+ClusterLabelYurit <- DimPlot(yurit.integrated, reduction = "umap", label = FALSE, pt.size = 0.5, repel = TRUE, split.by = "orig.ident", )
+# png("~/YuriT/Outputs/ClusterLabelYurit2.png", res = 250, width = 2500, height = 1500)
+# print(ClusterLabelYurit)
+# dev.off()
+```
+
+
+```{r}
+######ViolinPlots of Ccnd2 in each cluster comparing by sample of origin
+Idents(yurit.integratedSubC) <- "celltype_orig.ident"
+
+  VlnPlot(yurit.integratedSubC, features = "Ccnd2", idents = c("12_YuriT1001", "12_YuriT1002"))
+
+wt <- paste(rep(c(1:18), each=1), "YuriT1001", sep="_")
+wt
+ko <- paste(rep(c(1:18), each=1), "YuriT1002", sep="_")
+ko
+VPlotCcnd2 <- list()
+for (i in 1:length(wt)) {
+  #i=1
+  identtt <- c(wt[i], ko[i])
+  VPlotCcnd2[[i]] <- VlnPlot(yurit.integratedSubC, features = "Ccnd2", idents = identtt)
+   
+}
+
+for (i in 1:length(VPlotCcnd2)) {
+  saving_names <- paste0("~/YuriT/Outputs/VPlotCcnd2/VPlotCcnd2_", i, ".png")
+  png(saving_names, res = 250, width = 2500, height = 1500)
+print(VPlotCcnd2[[i]])
+dev.off()
+}
+
+```
+
+```{r}
+##### Renaming sample of origin from YuriT1001 and YuriT1002 to WT and dPTE
+yurit.integrated$OldOrig.ident <- yurit.integrated$orig.ident
+yurit.integrated@meta.data$orig.ident <- yurit.integrated@meta.data$orig.ident %>% rename("WT" ="YuriT1001")
+
+yurit.integrated@meta.data$orig.ident[yurit.integrated@meta.data$orig.ident=="YuriT1001"] <- "WT"
+yurit.integrated@meta.data$orig.ident[yurit.integrated@meta.data$orig.ident=="YuriT1002"] <- "dPTE"
+
+```
+
+
+```{r}
+###### Number and proportion of Cells per Cluster by sample of origin
+NumCellperCluster <- table(Idents(yurit.integrated), yurit.integrated$orig.ident)
+
+PropCellperCluster <- prop.table(table(Idents(yurit.integrated), yurit.integrated$orig.ident), margin = 2)
+
+NumCellperCluster
+PropCellperCluster
+
+```
+
+```{r}
+######ViolinPlots of Ccnd2 in each cluster comparing by sample of origin with correct cell IDs
+
+Idents(yurit.integrated) <- "celltype_neworig.ident"
+
+wt1 <- paste0( c("Naïve Cd4 Tcells C1" , "Naïve Cd4 Tcells C2", "Naïve Cd4 Tcells C3", "Naïve Cd4 Tcells C4", "Regulatory Cd4 Tcells", "Non-classical Monocytes", "Activated Cd4 Memory T cells", "Platelets", "Naïve Cd4 Tcells C9", "Plasmacytoid DCs", "Activated Regulatory Cd4 Tcells", "NKT cells", "Naïve Cd4 Tcells C13", "Acinar cells", "Cd4 Memory Tcells", "gDT", "Erythroid cells", "NK"), "_WT")
+ko1 <- paste0( c("Naïve Cd4 Tcells C1" , "Naïve Cd4 Tcells C2", "Naïve Cd4 Tcells C3", "Naïve Cd4 Tcells C4", "Regulatory Cd4 Tcells", "Non-classical Monocytes", "Activated Cd4 Memory T cells", "Platelets", "Naïve Cd4 Tcells C9", "Plasmacytoid DCs", "Activated Regulatory Cd4 Tcells", "NKT cells", "Naïve Cd4 Tcells C13", "Acinar cells", "Cd4 Memory Tcells", "gDT", "Erythroid cells", "NK"), "_dPTE")
+
+
+VPlot1Ccnd2 <- list()
+for (i in 1:length(wt1)) {
+  #i=1
+  identt <- c(wt1[i], ko1[i])
+  VPlot1Ccnd2[[i]] <- VlnPlot(yurit.integrated, features = "Ccnd2", idents = identt)
+   
+}
+
+for (i in 1:length(VPlot1Ccnd2)) {
+  saving_names <- paste0("~/YuriT/Outputs/VPlotCcnd2/VPlot1Ccnd2_", i, ".png")
+  png(saving_names, res = 250, width = 2500, height = 1500)
+print(VPlot1Ccnd2[[i]])
+dev.off()
+}
+
+wt1
+ko1
+```
+
+```{r}
+#CellScatter(yurit.integrated, cell1 = "Non-classical Monocytes_dPTE", cell2 = "Non-classical Monocytes_WT")
+```
+
+
+```{r}
+#### Proportion of cells in each cluster by sample of origin
+#Idents(yurit.integrated) <- "CellType"
+counts <- group_by(yurit.integrated@meta.data, orig.ident, CellType) %>% summarise(count = n())
+sums <- group_by(counts, CellType) %>% summarise(sum = sum(count))
+CountsPercent <- merge(counts, sums, all=TRUE) %>%
+  mutate(percent = count*100/sum)
+
+ pp <- ggplot(CountsPercent_ordered, aes(new_cell_type2, count, fill = orig.ident)) +
+   geom_bar(stat = 'identity')
+pp <- pp + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size = 15, color = "black"), axis.text.y = element_text(size = 15))+
+                   theme(axis.title.x = element_text(size = 20), axis.title.y = element_text(size = 20)) +
+  xlab("Cluster") +
+  theme(panel.background = element_blank())
+pp <- pp + scale_x_discrete(breaks=unique(CountsPercent_ordered$new_cell_type2), 
+    labels=addline_format(unique(CountsPercent_ordered$new_cell_type2)))
+
+ggsave("~/YuriT/Outputs/CTypeNumbInCluster.png", plot = pp, dpi = 300, width=40, height=20, units= "cm")
+
+# pp
+
+cell_types_df2 <- cell_types_df
+cell_types_df2$CellType <-cell_types_df2$cell_type
+cell_types_df2$cell_type <- NULL
+CountsPercent_ordered <- merge(cell_types_df2,CountsPercent, all=TRUE, sort=FALSE)
+CountsPercent_ordered$new_cell_type2 <- c("Intermediate Naïve-Treg", "Intermediate Naïve-Treg", "Naïve", 
+"Naïve", "Intermediate Naïve-Cd69", "Intermediate Naïve-Cd69", 
+"Intermediate Naïve-Smc4", "Intermediate Naïve-Smc4", "Tregs", 
+"Tregs", "Non-classical monocytes/ Macrophage", "Non-classical monocytes/ Macrophage", 
+"Effector memory", "Effector memory", "Platelets", "Platelets", 
+"Intermediate Naïve-Cholesterol", "Intermediate Naïve-Cholesterol", 
+"Intermediate Naïve-Interferon Response", "Intermediate Naïve-Interferon Response", 
+"Exhausted effector", "Exhausted effector", "NKT cells", "NKT cells", 
+"Intermediate Naïve Repressed", "Intermediate Naïve Repressed", 
+"Acinar cells", "Acinar cells", "Memory", "Memory", "gDT", "gDT", 
+"Erythroid cells", "Erythroid cells", "NK", "NK")
+
+addline_format <- function(x,...){
+    gsub('\\s','\n',x)
+}
+
+
+p0 <- ggplot(CountsPercent_ordered, aes(new_cell_type2, percent, fill = orig.ident)) +
+  geom_bar(stat = 'identity')+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  theme_classic()+
+  xlab("Cluster")+
+  #scale_y_continuous(limits = c(0,100), expand = c(0, 0))+
+  # facet_wrap(~new_cell_type, nrow=2, labeller = label_wrap_gen(width=10))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 15, color = "black"),
+        #axis.text.x = element_blank(),
+        axis.text.y = element_text( size = 15,color = "black"),
+        #axis.title.x = element_blank(),
+        #axis.ticks.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        #strip.background = element_blank(),
+        #strip.text = element_text(face = "bold", size = 15),
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16))
+
+p0 <- p0 + scale_x_discrete(breaks=unique(CountsPercent_ordered$new_cell_type2), 
+    labels=addline_format(unique(CountsPercent_ordered$new_cell_type2)))
+
+p0
+ggsave("~/YuriT/Outputs/CTypePropInCluster.png", plot = p0, dpi = 300, width=40, height=20, units= "cm")
+
+# png("~/YuriT/Outputs/CellPropInCluster.png", res = 250, width = 2500, height = 1500)
+# print(p0)
+# dev.off()
+
+
+```
+
+```{r}
+##### Proportion of cells in different cell cycle phase by cluster and by sample of origin
+
+library(stringr)
+
+#creating facet names
+old_cell_types <- unname(new.cluster.ids)
+
+new_cell_types <- c("Intermediate Naïve-Treg", "Naïve", "Intermediate Naïve-Cd69", 
+"Intermediate Naïve-Smc4", "Tregs", "Non classical monocytes/ Macrophage", 
+"Effector memory", "Platelets", "Intermediate Naïve Cholesterol", 
+"Intermediate Naïve Interferon Response", "Exhausted effector", 
+"NKT cells", "Intermediate Naïve Repressed", "Acinar cells", 
+"Memory", "gDT", "Erythroid cells", "NK")
+
+cell_types_df <- data.frame(cell_type=old_cell_types, new_cell_type= new_cell_types)
+
+
+counts1 <- group_by(yurit.integrated@meta.data, Phase, celltype_orig.ident) %>% summarise(count = n())
+
+sums1 <- group_by(counts1, celltype_orig.ident) %>% summarise(sum = sum(count))
+
+counts_percents <- merge(counts1, sums1, all=TRUE) %>%
+  mutate(percent = count*100/sum)
+
+counts_percents$orig.ident <- NA
+counts_percents$orig.ident[grep("WT",counts_percents$celltype_orig.ident)] <- "WT"
+counts_percents$orig.ident[grep("dPTE",counts_percents$celltype_orig.ident)] <- "dPTE"
+
+counts_percents$cell_type <- str_sub(counts_percents$celltype_orig.ident, rep(1,nrow(counts_percents)), -2-nchar(counts_percents$orig.ident))
+
+counts_percents_ordered <- merge(cell_types_df,counts_percents, all=TRUE, sort=FALSE)
+
+p <- ggplot(counts_percents_ordered, aes(orig.ident, percent, fill = Phase)) +
+  geom_bar(stat = 'identity')
+
+p_onerow <- p + 
+  theme_classic()+
+  scale_y_continuous(limits = c(0,100), expand = c(0, 0))+
+  facet_wrap(~new_cell_type, nrow=1, labeller = label_wrap_gen(width=10))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.x = element_blank(),
+        strip.background = element_blank())
+
+p_onerow
+
+ggsave("~/YuriT/Outputs/CCPropInCluster2.png", plot = p_onerow, dpi = 300, width=42, height=7, units= "cm")
+
+p_tworow <- p + 
+  theme_classic()+
+  scale_y_continuous(limits = c(0,100), expand = c(0, 0))+
+  facet_wrap(~new_cell_type, nrow=2, labeller = label_wrap_gen(width=10))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.x = element_blank(),
+        strip.background = element_blank())
+
+p_tworow
+
+ggsave("~/YuriT/Outputs/CCPropInClusterTwoRow.png", plot = p_tworow, dpi = 300, width=23, height=12, units= "cm")
+
+# p <- ggplot(counts1, aes(celltype_neworig.ident, count, fill = Phase)) +
+#   geom_bar(stat = 'identity')
+# 
+# p <- p + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+# p
+# png("~/YuriT/Outputs/CCPropInCluster.png", res = 250, width = 2500, height = 1500)
+# print(p)
+# dev.off()
+```
+
+```{r}
+FeaturePlot(yurit.integrated, features = c("Ccr7", "Il7r", "Cd44", "Sell", "Ldlr"))
+DimPlot(yurit.integrated, reduction = "umap", group.by = c("seurat_clusters", "Phase"), label = TRUE)
+
+```
+```{r}
+FeaturePlot(yurit.integrated, features = c( "Cd44", "Sell", "Cd28"), combine = FALSE)
+DimPlot(yurit.integrated, reduction = "umap", group.by = c("seurat_clusters"), label = TRUE)
+```
+
+```{r}
+# packageurl<-"https://cran.r-project.org/src/contrib/Archive/nloptr/nloptr_1.2.1.tar.gz"
+# 
+# install.packages(packageurl, repos=NULL, type="source")
+# 
+# install.packages("lme4")
+# install.packages("terra")
+# install.packages("spdep")
+# 
+# devtools::install_github('cole-trapnell-lab/monocle3', ref="develop")
+# library(monocle3)
+
+# remotes::install_github('satijalab/seurat-wrappers')
+# library(SeuratWrappers)
+```
+
+
+```{r}
+# saveRDS(yurit.integrated, file ="~/YuriT/Outputs/Yurit.integrated27Nov22.rds")
+# saveRDS(constMarker_list, file ="~/YuriT/Outputs/constMarker_list.rds")
+# saveRDS(Ccnd2.DE.Cluster_list, file ="~/YuriT/Outputs/Ccnd2.DE.Cluster_list.rds")
+
+
+#constMarker_list <- readRDS (file ="~/YuriT/Outputs/constMarker_list.rds")
+#slicedTop5_Yurit_integrated3AllClusterMarkers <- read.csv2(file ="~/YuriT/Outputs/slicedTop5_Yurit_integrated3AllClusterMarkers.df")
+#View(slicedTop5_Yurit_integrated3AllClusterMarkers)
+```
+
+```{r}
+#####DE genes between WT and dPTE
+
+Idents(yurit.integrated) <-"celltype_neworig.ident"
+  
+DE.WTdPTE_list <- list ()
+for (i in 1:length(wt1)) {
+  #i=1
+df <- FindMarkers(yurit.integrated, ident.1 = wt1[i], ident.2 =ko1[i], verbose = FALSE, logfc.threshold = 0.25)
+df$cluster <- i
+df$gene <- rownames(df)
+rownames(df) <- NULL
+DE.WTdPTE_list[[paste0("DE.WTdPTE_Cluster",i)]] <- df
+}
+
+DE.WTdPTE_list
+saveRDS(DE.WTdPTE_list,file = "~/YuriT/Outputs/DE.WTdPTE_list")
+
+DE.WTdPTE_listMerged <- Reduce(rbind, DE.WTdPTE_list)
+```
+
+```{r}
+#####Just checking best way to order the list
+DE.WTdPTE_listMerged2 <- DE.WTdPTE_listMerged %>% arrange(desc(avg_log2FC))
+DE.WTdPTE_listMerged2
+
+DE.WTdPTE_listMerged3 <- DE.WTdPTE_listMerged %>% arrange(desc(abs(avg_log2FC)))
+DE.WTdPTE_listMerged3
+```
+
+```{r cluster_marker_plots, dev="png"}
+##### Feature plot with two markers blended inthesame plot
+FeaturePlot(yurit.integrated, features = c("Il7r", "Sell"), blend = TRUE)
+```
+
+```{r}
+##### Dotplot with clusters marker genes
+dp <- DotPlot(yurit.integrated, features = c("Igfbp4", "Il7r", "Sell", "Smc4", "Myb", "Il2ra", "Foxp3", "Cd14", "Cd16", "Cd44", "Tbx21", "Ifng", "Tsc22d1", "Ppbp", "Ldlr", "Sqle", "Idi1", "Ifit1", "Stat1", "Igtp", "Ctla4", "Lag3", "Pdcd1", "Tox", "Gata3", "Il4", "Klrb1c", "Nk11", "Egr1", "Egr3", "Nfkbid", "Ctrb1", "Cela2a", "Ccl5", "Cxcr6", "Hopx", "S100b", "Hbb-bs", "Hba-a2", "Gzma", "Klrd1", "Nkg7"), split.by = "orig.ident", cols = c("blue","red"))+ RotatedAxis() +
+  theme(axis.text = element_text(size = 16, color = "black"))
+
+ggsave("~/YuriT/Outputs/ClusterMarkerDoplot.png", plot = dp, dpi = 300, width=50, height=30, units= "cm")
+```
+
+```{r}
+##### Violin plot with clusters marker genes
+vplot <- VlnPlot(yurit.integrated, features =c("Igfbp4", "Il7r", "Sell", "Smc4", "Myb", "Il2ra", "Foxp3", "Cd14", "Cd44", "Tbx21", "Ifng", "Tsc22d1", "Ppbp", "Ldlr", "Sqle", "Idi1", "Ifit1", "Stat1", "Igtp", "Ctla4", "Lag3", "Pdcd1", "Tox", "Gata3", "Il4", "Klrb1c", "Egr1", "Egr3", "Nfkbid", "Ctrb1", "Cela2a", "Ccl5", "Cxcr6", "Hopx", "Hbb-bs", "Hba-a2", "Gzma", "Klrd1", "Nkg7", "S100a4", "Itgb1"), stack = TRUE, sort = FALSE, flip = FALSE) +
+        theme(legend.position = "none") + ggtitle("Marker Genes")+
+  theme(axis.text = element_text(size = 16, color = "black")) 
+
+ggsave("~/YuriT/Outputs/ClusterMarkerVlnplot.png", plot = vplot, dpi = 300, width=60, height=30, units= "cm")
+```
+
+
+
+```{r}
+Tregs_cluster <- subset(yurit.integrated, idents = "Tregs")
+```
+
+```{r}
+#BiocManager::install("dittoSeq")
+```
+
+```{r}
+##### Subset each cluster, add in a list
+cluster_list <- list()
+for (i in new.cluster.ids) {
+ cluster_list[[paste0(i,"_cluster")]] <- subset(yurit.integrated, idents = i)
+}
+#saveRDS(cluster_list, file ="~/YuriT/Outputs/Subset_clusters" )
+```
+
+```{r}
+#####Genes average by sample of origin in each cluster
+library(cowplot)
+theme_set(theme_cowplot())
+
+AvgClusterlist <- list()
+for (cluster_name in names(cluster_list)) {
+   #cluster_name = names(cluster_list)[1]
+  cluster <- cluster_list[[cluster_name]]
+ 
+  Idents(cluster) <- "orig.ident"
+  
+  element <- paste0("avg.", cluster_name)
+  AvgClusterlist[[element]] <- log1p(AverageExpression(cluster, verbose = FALSE)$RNA)
+
+  AvgClusterlist[[element]] <- cbind(AvgClusterlist[[element]], gene = rownames(AvgClusterlist[[element]]))
+}
+
+
+
+```
+
+```{r}
+##### Some DE Plots
+DE.Plot_list <- list()
+for (i in 1:length(AvgClusterlist)) {
+  
+df_extract <- as.data.frame(AvgClusterlist[[i]])
+df_extract$WT <- as.numeric(df_extract$WT)
+df_extract$dPTE <- as.numeric(df_extract$dPTE)
+
+genes.to.label = DE.WTdPTE_list[[i]]$gene[1:10]
+p <- ggplot(df_extract, aes(dPTE, WT)) + geom_point() + ggtitle(names(new.cluster.ids)[i])
+p <- LabelPoints(plot = p, points = genes.to.label, repel = TRUE)  
+DE.Plot_list[[paste0("p", i)]] <- p
+}
+
+saveRDS(DE.Plot_list, file = "~/YuriT/Outputs/DE.Plot_list")
+saveRDS(AvgClusterlist, file = "~/YuriT/Outputs/AvgClusterlist")
+
+```
+
+
+
+```{r}
+##### DE Plots with labels
+genes.to.labelTest1 = c("Uba52", "Gm10076", "Hspa8","Hsp90aa1", "Hsp90ab1", "Dnaja1","Dnajb1", "Hspa1b", "Hsph1","Rsrp1")
+
+df_test <- as.data.frame(AvgClusterlist$`avg.Intermediate_Naïve-Treg_cluster`)
+df_test$WT <- as.numeric(df_test$WT)
+df_test$dPTE <- as.numeric(df_test$dPTE)
+p1 <- ggplot(df_test, aes(dPTE, WT)) + geom_point() + ggtitle("Intermediate_Naïve-Treg_cluster")
+p1 <- LabelPoints(plot = p1, points = genes.to.labelTest1, repel = TRUE)
+p1
+
+```
+
+
+
+```{r}
+#####Run propeller testing for cell type proportion differences between the two groups
+
+############Not possible because not replicate for any of the sample
+
+# devtools/remotes won't install Suggested packages from Bioconductor
+# BiocManager::install(c("CellBench", "BiocStyle", "scater"))
+# 
+# remotes::install_github("Oshlack/speckle", build_vignettes = TRUE, 
+# dependencies = "Suggest")
+# browseVignettes("speckle")
+# library(speckle)
+# library(limma)
+```
+
+```{r}
+######Average expression of Ccnd2
+AvgCcnd2InCluster <- AverageExpression(yurit.integrated, features = "Ccnd2", group.by = "CellType")
+AvgCcnd2InClusterWT_dPTE <- AverageExpression(yurit.integrated, features = "Ccnd2", group.by = "celltype_orig.ident")
+
+AvgCcnd2InCluster_df <- as.data.frame(t(AvgCcnd2InCluster$RNA))
+AvgCcnd2InCluster_df$Clusters <- rownames(AvgCcnd2InCluster_df)
+AvgCcnd2InCluster_df$AvgExpressionCcnd2 <-AvgCcnd2InCluster_df$V1
+p1 <- ggplot(AvgCcnd2InCluster_df, aes(Clusters,AvgExpressionCcnd2)) + geom_col() +
+  ggtitle("Ccnd2 expression")
+
+p1 <- p1 + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, face = "bold", size = 10))
+#ggsave("~/YuriT/Outputs/AvgCcnd2InCluster.png", plot = p1, dpi = 300, width=30, height=20, units= "cm")
+
+AvgCcnd2InClusterWTdPTE_df <- as.data.frame(t(AvgCcnd2InClusterWT_dPTE$RNA))
+AvgCcnd2InClusterWTdPTE_df$Clusters <- rownames(AvgCcnd2InClusterWTdPTE_df)
+AvgCcnd2InClusterWTdPTE_df$AvgExpressionCcnd2 <-AvgCcnd2InClusterWTdPTE_df$V1
+p2 <- ggplot(AvgCcnd2InClusterWTdPTE_df, aes(Clusters,AvgExpressionCcnd2)) + geom_col() +
+  ggtitle("Ccnd2 expression")
+
+p2 <- p2 + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, face = "bold", size = 10))
+#ggsave("~/YuriT/Outputs/AvgCcnd2InClusterWTdPTE.png", plot = p2, dpi = 300, width=30, height=20, units= "cm")
+
+
+AvgCcnd2InClusterWTdPTE_df$orig.ident <- NA
+AvgCcnd2InClusterWTdPTE_df$orig.ident[grep("WT",AvgCcnd2InClusterWTdPTE_df$Clusters)] <- "WT"
+AvgCcnd2InClusterWTdPTE_df$orig.ident[grep("dPTE",AvgCcnd2InClusterWTdPTE_df$Clusters)] <- "dPTE"
+
+AvgCcnd2InClusterWTdPTE_df$Cluster <- str_sub(AvgCcnd2InClusterWTdPTE_df$Clusters, rep(1,nrow(AvgCcnd2InClusterWTdPTE_df)), -2-nchar(AvgCcnd2InClusterWTdPTE_df$orig.ident))
+
+AvgCcnd2InClusterWTdPTE_dfOld <- AvgCcnd2InClusterWTdPTE_df
+cell_types_df2 <- cell_types_df
+names(cell_types_df2) <- c("Cluster", "NewClusterIDs" )
+AvgCcnd2InClusterWTdPTE_df <- merge(cell_types_df2,AvgCcnd2InClusterWTdPTE_dfOld, all=TRUE, sort=FALSE)
+
+p3 <- ggplot(AvgCcnd2InClusterWTdPTE_df, aes(orig.ident, AvgExpressionCcnd2, color=orig.ident, fill=orig.ident)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9))
+
+p3 <- p3 + 
+  theme_classic()+
+  xlab("orig.ident")+
+  #scale_y_continuous(limits = c(0,100), expand = c(0, 0))+
+  facet_wrap(~NewClusterIDs, nrow=2, labeller = label_wrap_gen(width=10))+
+  theme(#axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 15, color = "black"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text( size = 15,color = "black"),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 15),
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_text(size = 16),
+        legend.text = element_text(size = 16))
+
+p3
+
+# p4 <- p4 + 
+#   theme_classic()+theme(#axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 15, color = "black"),
+#         axis.text.x = element_blank(),
+#         axis.text.y = element_text( size = 15,color = "black"),
+#         axis.title.x = element_blank(),
+#         axis.ticks.x = element_blank(),
+#         axis.title.y = element_text(size = 15),
+#         strip.background = element_blank(),
+#         strip.text = element_text(face = "bold", size = 15),
+#         legend.key.size = unit(1, "cm"),
+#         legend.title = element_text(size = 16),
+#         legend.text = element_text(size = 16))
+# 
+# ggsave("~/YuriT/Outputs/AvgCcnd2InClusterWTdPTE3.png", plot = p4, dpi = 300, width=20, height=20, units= "cm")
+
+```
+
+```{r}
+##### DE genes with log2FC threshold at 0.2
+Idents(yurit.integrated) <- "orig.ident"
+DE_OrigIdent3 <- FindMarkers(yurit.integrated, ident.1 = "WT", ident.2 = "dPTE",logfc.threshold = 0.2 )
+# write.csv2(DE_OrigIdent2, file = "~/YuriT/Outputs/DE_OrigIdentLogFC0")
+```
+```{r}
+##### Volcano Plot of DE genes
+  #BiocManager::install('EnhancedVolcano')
+#library(EnhancedVolcano)
+  volcano <- EnhancedVolcano(DE_OrigIdent2,
+    lab = rownames(DE_OrigIdent2),
+    x = 'avg_log2FC',
+    y = 'p_val',
+    xlim = c(-0.5, 0.8),
+    FCcutoff = 0.2,
+    title = "DE Genes",
+    pointSize = 3.0,
+    legendLabels=c('Not sig.','Log2FC','p-value',
+      'p-value & Log2FC'),
+    legendPosition = 'right',
+    legendLabSize = 16,
+    legendIconSize = 5.0,
+    labSize = 6,
+    boxedLabels = TRUE,
+    drawConnectors = TRUE,
+    widthConnectors = 1.0,
+    subtitle = "WT versus dPTE"
+    )
+
+ggsave("~/YuriT/Outputs/VolcanoDEWTdPTE.png", plot = volcano, dpi = 300, width=30, height=20, units= "cm")
+```
+```{r}
+##### Ccnd2 average in WT and dPTE
+AvgCcnd2General <- AverageExpression(yurit.integrated, features = "Ccnd2")
+AvgCcnd2RNA <- data.frame(orig.ident= c("WT", "dPTE"), avgCcnd2Expression = c(8.554136, 8.339057))
+
+px <- ggplot(AvgCcnd2RNA, aes(orig.ident, AvgExpressionCcnd2, color=orig.ident, fill=orig.ident)) +
+     geom_bar(stat = "identity") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 15, color = "black"), legend.key.size = unit(1, "cm"), legend.title = element_text(size = 16),legend.text = element_text(size = 16), axis.title = element_text(size = 16))
+ggsave("~/YuriT/Outputs/AvgCcnd2InClusterWTdPTE4.png", plot = px, dpi = 300, width=20, height=20, units= "cm")
+px
+```
+
+
+```{r}
+DE.WTdPTE_listSub <- DE.WTdPTE_listMerged %>%
+    group_by(cluster) %>%
+    slice_max(n = 10, order_by = avg_log2FC)
+DE.WTdPTE_listSub
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
